@@ -1,4 +1,4 @@
-import { Building, PrestigeUpgrade, GardenPlot } from './types';
+import { Building, PrestigeUpgrade, Expedition } from './types';
 
 export const initialBuildings: Building[] = [
   {
@@ -233,88 +233,90 @@ export function calculatePrestigeSpores(totalMushrooms: number, sporeMulti: numb
   return Math.floor(base * sporeMulti);
 }
 
-// Грибные грядки - пост-престижная механика
-export const initialGardenPlots: GardenPlot[] = [
+// Экспедиции - отдельная механика прогресса
+export const initialExpeditions: Expedition[] = [
   {
-    id: 'champignon',
-    name: 'Шампиньонная грядка',
-    description: '+3% к производству за уровень',
-    emoji: '🍄',
-    baseCost: 5,
-    costMultiplier: 1.8,
-    level: 0,
-    maxLevel: 50,
-    effect: 'production',
-    effectValue: 0.03,
-    unlockAtPrestige: 1,
+    id: 'forest_expedition',
+    name: 'Лесная экспедиция',
+    description: 'Исследуйте близлежащий лес',
+    emoji: '🌲',
+    duration: 30000, // 30 секунд
+    cost: 500,
+    reward: 'mushrooms',
+    rewardValue: 1000,
+    unlockAt: 5, // нужно 5 зданий всего
+    active: false,
+    startTime: null,
+    completed: 0,
   },
   {
-    id: 'chanterelle',
-    name: 'Лисичковая грядка',
-    description: '+5% к силе клика за уровень',
+    id: 'cave_expedition',
+    name: 'Пещерная экспедиция',
+    description: 'Исследуйте грибные пещеры',
+    emoji: '🕳️',
+    duration: 60000, // 1 минута
+    cost: 5000,
+    reward: 'multiplier',
+    rewardValue: 0.05, // +5% к производству
+    unlockAt: 15,
+    active: false,
+    startTime: null,
+    completed: 0,
+  },
+  {
+    id: 'mountain_expedition',
+    name: 'Горная экспедиция',
+    description: 'Покорите грибные вершины',
+    emoji: '⛰️',
+    duration: 120000, // 2 минуты
+    cost: 25000,
+    reward: 'click',
+    rewardValue: 10, // +10 к клику
+    unlockAt: 30,
+    active: false,
+    startTime: null,
+    completed: 0,
+  },
+  {
+    id: 'swamp_expedition',
+    name: 'Болотная экспедиция',
+    description: 'Проберитесь через опасные болота',
     emoji: '🌿',
-    baseCost: 8,
-    costMultiplier: 1.8,
-    level: 0,
-    maxLevel: 50,
-    effect: 'click',
-    effectValue: 0.05,
-    unlockAtPrestige: 1,
+    duration: 180000, // 3 минуты
+    cost: 100000,
+    reward: 'production',
+    rewardValue: 0.10, // +10% к производству
+    unlockAt: 50,
+    active: false,
+    startTime: null,
+    completed: 0,
   },
   {
-    id: 'truffle',
-    name: 'Трюфельная грядка',
-    description: '+2% ко всем спорам за уровень',
-    emoji: '💎',
-    baseCost: 15,
-    costMultiplier: 2.0,
-    level: 0,
-    maxLevel: 30,
-    effect: 'spore_gain',
-    effectValue: 0.02,
-    unlockAtPrestige: 2,
+    id: 'ancient_expedition',
+    name: 'Древняя экспедиция',
+    description: 'Найдите потерянные грибные руины',
+    emoji: '🏛️',
+    duration: 300000, // 5 минут
+    cost: 500000,
+    reward: 'global',
+    rewardValue: 0.15, // +15% ко всему
+    unlockAt: 75,
+    active: false,
+    startTime: null,
+    completed: 0,
   },
   {
-    id: 'golden',
-    name: 'Золотая грядка',
-    description: '+1% шанс ×2 производства за уровень',
-    emoji: '🌟',
-    baseCost: 25,
-    costMultiplier: 2.2,
-    level: 0,
-    maxLevel: 20,
-    effect: 'double_chance',
-    effectValue: 0.01,
-    unlockAtPrestige: 3,
-  },
-  {
-    id: 'lightning',
-    name: 'Грозовая грядка',
-    description: '+0.5 автоклика/сек за уровень',
-    emoji: '⚡',
-    baseCost: 40,
-    costMultiplier: 2.5,
-    level: 0,
-    maxLevel: 20,
-    effect: 'autoclick',
-    effectValue: 0.5,
-    unlockAtPrestige: 4,
-  },
-  {
-    id: 'mystic',
-    name: 'Мистическая грядка',
-    description: '×1.05 ко всему производству за уровень',
-    emoji: '🔮',
-    baseCost: 100,
-    costMultiplier: 3.0,
-    level: 0,
-    maxLevel: 15,
-    effect: 'global_multi',
-    effectValue: 0.05,
-    unlockAtPrestige: 5,
+    id: 'dimension_expedition',
+    name: 'Межпространственная экспедиция',
+    description: 'Исследуйте грибные измерения',
+    emoji: '🌀',
+    duration: 600000, // 10 минут
+    cost: 5000000,
+    reward: 'massive',
+    rewardValue: 0.25, // +25% ко всему
+    unlockAt: 100,
+    active: false,
+    startTime: null,
+    completed: 0,
   },
 ];
-
-export function getGardenCost(plot: GardenPlot): number {
-  return Math.floor(plot.baseCost * Math.pow(plot.costMultiplier, plot.level));
-}

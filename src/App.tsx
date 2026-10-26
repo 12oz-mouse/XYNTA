@@ -3,14 +3,13 @@ import { GameState } from './types';
 import {
   initialBuildings,
   initialPrestigeUpgrades,
-  initialGardenPlots,
+  initialExpeditions,
   formatNumber,
   getBuildingCost,
   calculatePrestigeSpores,
-  getGardenCost,
 } from './gameData';
 
-const SAVE_KEY = 'mushroom_empire_save_v4';
+const SAVE_KEY = 'mushroom_empire_save_v5';
 
 // Achievement definitions
 const ACHIEVEMENTS = [
@@ -29,8 +28,8 @@ const ACHIEVEMENTS = [
   { id: 'all_types', name: 'Коллекционер', desc: 'Иметь все типы зданий', emoji: '🎪', check: (g: GameState) => g.buildings.every(b => b.count > 0) },
   { id: 'combo_10', name: 'Комбо-мастер', desc: 'Достичь комбо ×10', emoji: '🔥', check: (_g: GameState) => false },
   { id: 'golden', name: 'Золотая лихорадка', desc: 'Поймать золотой гриб', emoji: '🌟', check: (_g: GameState) => false },
-  { id: 'first_garden', name: 'Садовник', desc: 'Посадить первую грядку', emoji: '🌱', check: (g: GameState) => g.gardenPlots.some(p => p.level > 0) },
-  { id: 'full_garden', name: 'Полный сад', desc: 'Все грядки хотя бы 5 уровня', emoji: '🏡', check: (g: GameState) => g.gardenPlots.filter(p => p.unlockAtPrestige <= g.prestigeCount).every(p => p.level >= 5) },
+  { id: 'first_expedition', name: 'Исследователь', desc: 'Завершить первую экспедицию', emoji: '🗺️', check: (g: GameState) => g.expeditions.some(e => e.completed > 0) },
+  { id: 'all_expeditions', name: 'Великий путешественник', desc: 'Завершить все типы экспедиций', emoji: '🌍', check: (g: GameState) => g.expeditions.every(e => e.completed > 0) },
 ];
 
 // Building milestone bonuses
@@ -63,8 +62,9 @@ function getInitialState(): GameState {
     try {
       const parsed = JSON.parse(saved);
       // Migrate old saves
-      if (!parsed.gardenPlots) {
-        parsed.gardenPlots = initialGardenPlots.map(p => ({ ...p }));
+      if (!parsed.expeditions) {
+        parsed.expeditions = initialExpeditions.map(e => ({ ...e }));
+        parsed.expeditionBonus = 0;
       }
       return { ...parsed, mushroomsPerSecond: 0, mushroomsPerClick: 1 };
     } catch {
@@ -85,14 +85,15 @@ function getInitialState(): GameState {
     prestigeUpgrades: initialPrestigeUpgrades.map((u) => ({ ...u })),
     clickMultiplier: 1,
     globalMultiplier: 1,
-    gardenPlots: initialGardenPlots.map((p) => ({ ...p })),
+    expeditions: initialExpeditions.map((e) => ({ ...e })),
+    expeditionBonus: 0,
     lastSave: Date.now(),
   };
 }
 
 export default function App() {
   const [game, setGame] = useState<GameState>(getInitialState);
-  const [activeTab, setActiveTab] = useState<'buildings' | 'upgrades' | 'prestige' | 'garden' | 'achievements'>('buildings');
+  const [activeTab, setActiveTab] = useState<'buildings' | 'upgrades' | 'prestige' | 'expeditions' | 'achievements'>('buildings');
   const [clickEffects, setClickEffects] = useState<{ id: number; x: number; y: number; value: number; color?: string }[]>([]);
   const [showPrestigeConfirm, setShowPrestigeConfirm] = useState(false);
   const [mushroomScale, setMushroomScale] = useState(1);
@@ -140,31 +141,6 @@ export default function App() {
   const unlockedRef = useRef(unlockedAchievements);
   unlockedRef.current = unlockedAchievements;
 
-  // Garden bonuses calculation
-  const getGardenBonuses = useCallback(() => {
-    let productionBonus = 0;
-    let clickBonus = 0;
-    let sporeGainBonus = 0;
-    let doubleChance = 0;
-    let gardenAutoclick = 0;
-    let globalMulti = 1;
-
-    for (const plot of game.gardenPlots) {
-      if (plot.level === 0) continue;
-      const value = plot.effectValue * plot.level;
-      switch (plot.effect) {
-        case 'production': productionBonus += value; break;
-        case 'click': clickBonus += value; break;
-        case 'spore_gain': sporeGainBonus += value; break;
-        case 'double_chance': doubleChance += value; break;
-        case 'autoclick': gardenAutoclick += value; break;
-        case 'global_multi': globalMulti *= (1 + value); break;
-      }
-    }
-
-    return { productionBonus, clickBonus, sporeGainBonus, doubleChance, gardenAutoclick, globalMulti };
-  }, [game.gardenPlots]);
-
   // Calculate derived values
   const getDiscount = useCallback(() => {
     const discountUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_discount');
@@ -200,39 +176,32 @@ export default function App() {
     const boostUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_boost');
     const boostMulti = boostUpgrade ? 1 + boostUpgrade.level * 0.25 : 1;
     const eventMulti = getEventMultiplier('production');
-    const garden = getGardenBonuses();
-    const gardenMulti = (1 + garden.productionBonus) * garden.globalMulti;
-    
-    // Double chance from garden
-    const doubleMulti = Math.random() < garden.doubleChance ? 2 : 1;
-    
-    return game.globalMultiplier * boostMulti * eventMulti * gardenMulti * doubleMulti;
-  }, [game.prestigeUpgrades, game.globalMultiplier, getEventMultiplier, getGardenBonuses]);
+    const expeditionMulti = 1 + game.expeditionBonus;
+    return game.globalMultiplier * boostMulti * eventMulti * expeditionMulti;
+  }, [game.prestigeUpgrades, game.globalMultiplier, game.expeditionBonus, getEventMultiplier]);
 
   const getClickPower = useCallback(() => {
     const clickUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_click');
     const clickMulti = clickUpgrade ? 1 + clickUpgrade.level * 0.5 : 1;
     const comboMulti = 1 + combo * 0.1;
     const eventMulti = getEventMultiplier('click');
-    const garden = getGardenBonuses();
-    const gardenClickMulti = 1 + garden.clickBonus;
-    return game.mushroomsPerClick * game.clickMultiplier * clickMulti * comboMulti * eventMulti * gardenClickMulti;
-  }, [game.prestigeUpgrades, game.mushroomsPerClick, game.clickMultiplier, combo, getEventMultiplier, getGardenBonuses]);
+    return game.mushroomsPerClick * game.clickMultiplier * clickMulti * comboMulti * eventMulti;
+  }, [game.prestigeUpgrades, game.mushroomsPerClick, game.clickMultiplier, combo, getEventMultiplier]);
 
   const getAutoClicks = useCallback(() => {
     const autoUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_autoclick');
-    const prestigeAuto = autoUpgrade ? autoUpgrade.level : 0;
-    const garden = getGardenBonuses();
-    return prestigeAuto + garden.gardenAutoclick;
-  }, [game.prestigeUpgrades, getGardenBonuses]);
+    return autoUpgrade ? autoUpgrade.level : 0;
+  }, [game.prestigeUpgrades]);
 
   const getSporeMultiplier = useCallback(() => {
     const megaUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_mega');
-    const megaMulti = megaUpgrade ? Math.pow(2, megaUpgrade.level) : 1;
-    const garden = getGardenBonuses();
-    const gardenMulti = 1 + garden.sporeGainBonus;
-    return megaMulti * gardenMulti;
-  }, [game.prestigeUpgrades, getGardenBonuses]);
+    return megaUpgrade ? Math.pow(2, megaUpgrade.level) : 1;
+  }, [game.prestigeUpgrades]);
+
+  // Calculate total buildings
+  const getTotalBuildings = useCallback(() => {
+    return game.buildings.reduce((sum, b) => sum + b.count, 0);
+  }, [game.buildings]);
 
   // Calculate MPS
   const calculateMPS = useCallback(() => {
@@ -242,20 +211,8 @@ export default function App() {
       const milestoneMulti = getBuildingMilestoneMultiplier(building.count);
       total += building.baseProduction * building.count * milestoneMulti;
     }
-    const baseProduction = total * multi;
-    
-    // Autoclicks (including garden) with click modifiers
-    const autoClicks = getAutoClicks();
-    const clickUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_click');
-    const clickMulti = clickUpgrade ? 1 + clickUpgrade.level * 0.5 : 1;
-    const garden = getGardenBonuses();
-    const gardenClickMulti = 1 + garden.clickBonus;
-    const eventClickMulti = getEventMultiplier('click');
-    const autoClickPower = game.mushroomsPerClick * game.clickMultiplier * clickMulti * gardenClickMulti * eventClickMulti;
-    const autoClickProduction = autoClicks * autoClickPower;
-    
-    return baseProduction + autoClickProduction;
-  }, [game.buildings, game.prestigeUpgrades, game.mushroomsPerClick, game.clickMultiplier, getProductionMultiplier, getBuildingMilestoneMultiplier, getAutoClicks, getGardenBonuses, getEventMultiplier]);
+    return total * multi;
+  }, [game.buildings, getProductionMultiplier, getBuildingMilestoneMultiplier]);
 
   // Game loop
   useEffect(() => {
@@ -273,28 +230,8 @@ export default function App() {
           }
         }
         
-        // Garden bonuses
-        let gardenProdBonus = 0;
-        let gardenGlobalMulti = 1;
-        let gardenAutoClick = 0;
-        let gardenClickBonus = 0;
-        let gardenDoubleChance = 0;
-        for (const plot of prev.gardenPlots) {
-          if (plot.level === 0) continue;
-          const value = plot.effectValue * plot.level;
-          switch (plot.effect) {
-            case 'production': gardenProdBonus += value; break;
-            case 'global_multi': gardenGlobalMulti *= (1 + value); break;
-            case 'autoclick': gardenAutoClick += value; break;
-            case 'click': gardenClickBonus += value; break;
-            case 'double_chance': gardenDoubleChance += value; break;
-          }
-        }
-        
-        const multi = prev.globalMultiplier * boostMulti * eventMulti * (1 + gardenProdBonus) * gardenGlobalMulti;
-        
-        // Double chance roll
-        const doubleRoll = Math.random() < gardenDoubleChance ? 2 : 1;
+        const expeditionMulti = 1 + prev.expeditionBonus;
+        const multi = prev.globalMultiplier * boostMulti * eventMulti * expeditionMulti;
 
         let production = 0;
         for (const building of prev.buildings) {
@@ -304,28 +241,35 @@ export default function App() {
           }
           production += building.baseProduction * building.count * milestoneMulti;
         }
-        production *= multi * doubleRoll;
+        production *= multi;
 
-        // Autoclicks with all click modifiers
-        const autoUpgrade = prev.prestigeUpgrades.find((u) => u.id === 'spore_autoclick');
-        const prestigeAuto = autoUpgrade ? autoUpgrade.level : 0;
-        const totalAutoClicks = prestigeAuto + gardenAutoClick;
-        
+        const autoClickUpgrade = prev.prestigeUpgrades.find((u) => u.id === 'spore_autoclick');
+        const autoClicks = autoClickUpgrade ? autoClickUpgrade.level : 0;
         const clickUpgrade = prev.prestigeUpgrades.find((u) => u.id === 'spore_click');
         const clickMulti = clickUpgrade ? 1 + clickUpgrade.level * 0.5 : 1;
-        
-        // Event click multiplier
-        let eventClickMulti = 1;
-        for (const ae of activeEventsRef.current) {
-          if (ae.endsAt > now && ae.event.type === 'click') {
-            eventClickMulti *= ae.event.multi;
-          }
-        }
-        
-        const autoClickPower = prev.mushroomsPerClick * prev.clickMultiplier * clickMulti * (1 + gardenClickBonus) * eventClickMulti;
-        const autoClickProduction = totalAutoClicks * autoClickPower;
+        const clickPower = prev.mushroomsPerClick * prev.clickMultiplier * clickMulti;
+        const autoClickProduction = autoClicks * clickPower;
 
         const totalGain = (production + autoClickProduction) / 10;
+
+        // Check expedition completions
+        const newExpeditions = prev.expeditions.map(exp => {
+          if (exp.active && exp.startTime && now >= exp.startTime + exp.duration) {
+            // Expedition completed
+            let newPrev = { ...prev };
+            if (exp.reward === 'mushrooms') {
+              newPrev.mushrooms += exp.rewardValue;
+              newPrev.totalMushrooms += exp.rewardValue;
+              newPrev.totalMushroomsAllTime += exp.rewardValue;
+            } else if (exp.reward === 'multiplier' || exp.reward === 'production' || exp.reward === 'global' || exp.reward === 'massive') {
+              newPrev.expeditionBonus += exp.rewardValue;
+            } else if (exp.reward === 'click') {
+              newPrev.mushroomsPerClick += exp.rewardValue;
+            }
+            return { ...exp, active: false, startTime: null, completed: exp.completed + 1 };
+          }
+          return exp;
+        });
 
         return {
           ...prev,
@@ -333,6 +277,7 @@ export default function App() {
           totalMushrooms: prev.totalMushrooms + totalGain,
           totalMushroomsAllTime: prev.totalMushroomsAllTime + totalGain,
           mushroomsPerSecond: production + autoClickProduction,
+          expeditions: newExpeditions,
         };
       });
     }, 100);
@@ -554,6 +499,60 @@ export default function App() {
     });
   }, []);
 
+  // Buy max buildings
+  const buyBuildingMax = useCallback((buildingId: string) => {
+    setGame((prev) => {
+      const discount = (() => {
+        const du = prev.prestigeUpgrades.find((u) => u.id === 'spore_discount');
+        return du ? du.level * 0.05 : 0;
+      })();
+      const building = prev.buildings.find((b) => b.id === buildingId);
+      if (!building) return prev;
+
+      let count = 0;
+      let totalCost = 0;
+      let mushrooms = prev.mushrooms;
+
+      while (true) {
+        const cost = getBuildingCost({ ...building, count: building.count + count }, discount);
+        if (mushrooms < cost) break;
+        mushrooms -= cost;
+        totalCost += cost;
+        count++;
+      }
+
+      if (count === 0) return prev;
+
+      const newBuildings = prev.buildings.map((b) =>
+        b.id === buildingId ? { ...b, count: b.count + count } : b
+      );
+
+      return {
+        ...prev,
+        mushrooms: mushrooms,
+        buildings: newBuildings,
+      };
+    });
+  }, []);
+
+  // Start expedition
+  const startExpedition = useCallback((expeditionId: string) => {
+    setGame((prev) => {
+      const expedition = prev.expeditions.find((e) => e.id === expeditionId);
+      if (!expedition || expedition.active || prev.mushrooms < expedition.cost) return prev;
+
+      const newExpeditions = prev.expeditions.map((e) =>
+        e.id === expeditionId ? { ...e, active: true, startTime: Date.now() } : e
+      );
+
+      return {
+        ...prev,
+        mushrooms: prev.mushrooms - expedition.cost,
+        expeditions: newExpeditions,
+      };
+    });
+  }, []);
+
   // Click upgrades
   const clickUpgrades = [
     { id: 'click1', name: 'Крепкие руки', cost: 100, power: 1, emoji: '✊', unlockAt: 50 },
@@ -627,7 +626,7 @@ export default function App() {
       prestigeCount: prev.prestigeCount + 1,
       clickMultiplier: 1,
       globalMultiplier: 1,
-      // gardenPlots сохраняются!
+      // expeditions и expeditionBonus сохраняются!
     }));
     setPurchasedUpgrades(new Set());
     setShowPrestigeConfirm(false);
@@ -664,31 +663,11 @@ export default function App() {
     });
   }, []);
 
-  // Buy/upgrade garden plot
-  const upgradeGardenPlot = useCallback((plotId: string) => {
-    setGame((prev) => {
-      const plot = prev.gardenPlots.find((p) => p.id === plotId);
-      if (!plot || plot.level >= plot.maxLevel) return prev;
-      const cost = getGardenCost(plot);
-      if (prev.spores < cost) return prev;
-
-      const newPlots = prev.gardenPlots.map((p) =>
-        p.id === plotId ? { ...p, level: p.level + 1 } : p
-      );
-
-      return {
-        ...prev,
-        spores: prev.spores - cost,
-        gardenPlots: newPlots,
-      };
-    });
-  }, []);
-
   const mps = calculateMPS();
   const clickPower = getClickPower();
   const prestigeGain = getPrestigeSporesGain();
   const comboMulti = 1 + combo * 0.1;
-  const gardenBonuses = getGardenBonuses();
+  const totalBuildings = getTotalBuildings();
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-green-950 via-green-900 to-emerald-950 text-white font-sans relative overflow-hidden">
@@ -807,12 +786,12 @@ export default function App() {
               </div>
               <div className="flex justify-between">
                 <span className="text-green-400">Множитель:</span>
-                <span className="font-bold">×{(game.globalMultiplier * (1 + gardenBonuses.productionBonus) * gardenBonuses.globalMulti).toFixed(2)}</span>
+                <span className="font-bold">×{getProductionMultiplier().toFixed(2)}</span>
               </div>
               {getAutoClicks() > 0 && (
                 <div className="flex justify-between">
                   <span className="text-green-400">Автокликов:</span>
-                  <span className="font-bold">{getAutoClicks().toFixed(1)}/с</span>
+                  <span className="font-bold">{getAutoClicks()}/с</span>
                 </div>
               )}
               <div className="flex justify-between">
@@ -846,8 +825,8 @@ export default function App() {
               <p className="text-xs text-green-500">💡 Бонусы за здания: ×2 при 10/25/50/100/150/200</p>
               <p className="text-xs text-yellow-500">🌟 Ловите золотые грибы для бонусов!</p>
               <p className="text-xs text-orange-400">🔥 Быстрые клики = комбо-множитель!</p>
-              {game.prestigeCount > 0 && (
-                <p className="text-xs text-purple-400">🌱 Проверьте вкладку «Грядки»!</p>
+              {totalBuildings >= 5 && (
+                <p className="text-xs text-blue-400">🗺️ Проверьте вкладку «Экспедиции»!</p>
               )}
             </div>
           </div>
@@ -887,16 +866,16 @@ export default function App() {
             >
               🌀 Престиж
             </button>
-            {game.prestigeCount > 0 && (
+            {totalBuildings >= 5 && (
               <button
-                onClick={() => setActiveTab('garden')}
+                onClick={() => setActiveTab('expeditions')}
                 className={`px-4 py-2 rounded-t-lg font-bold transition-all whitespace-nowrap ${
-                  activeTab === 'garden'
-                    ? 'bg-emerald-700/50 text-emerald-200 border-b-2 border-emerald-400'
-                    : 'bg-black/20 text-emerald-400 hover:bg-black/30'
+                  activeTab === 'expeditions'
+                    ? 'bg-blue-700/50 text-blue-200 border-b-2 border-blue-400'
+                    : 'bg-black/20 text-blue-400 hover:bg-black/30'
                 }`}
               >
-                🌱 Грядки
+                🗺️ Экспедиции
               </button>
             )}
             <button
@@ -960,13 +939,13 @@ export default function App() {
                         <button
                           onClick={() => buyBuilding(building.id)}
                           disabled={!canAfford}
-                          className={`px-3 py-1.5 rounded text-sm font-bold transition-all ${
+                          className={`px-3 py-1 rounded text-xs font-bold transition-all ${
                             canAfford
                               ? 'bg-green-600 hover:bg-green-500 text-white hover:scale-105'
                               : 'bg-gray-700 text-gray-400 cursor-not-allowed'
                           }`}
                         >
-                          {formatNumber(cost)} 🍄
+                          ×1 {formatNumber(cost)}
                         </button>
                         <button
                           onClick={() => buyBuilding10(building.id)}
@@ -978,6 +957,17 @@ export default function App() {
                           }`}
                         >
                           ×10
+                        </button>
+                        <button
+                          onClick={() => buyBuildingMax(building.id)}
+                          disabled={!canAfford}
+                          className={`px-3 py-1 rounded text-xs font-bold transition-all ${
+                            canAfford
+                              ? 'bg-green-800 hover:bg-green-700 text-white'
+                              : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                          }`}
+                        >
+                          Макс
                         </button>
                       </div>
                     </div>
@@ -1141,36 +1131,44 @@ export default function App() {
               </div>
             )}
 
-            {activeTab === 'garden' && (
+            {activeTab === 'expeditions' && (
               <div className="space-y-4">
-                <div className="bg-emerald-900/30 rounded-lg p-4 border border-emerald-700/30">
-                  <h3 className="text-lg font-bold text-emerald-200 mb-2">🌱 Грибные Грядки</h3>
-                  <p className="text-sm text-emerald-300 mb-2">
-                    Улучшайте грядки за споры. Они дают <b>постоянные бонусы</b>, которые не сбрасываются при престиже!
+                <div className="bg-blue-900/30 rounded-lg p-4 border border-blue-700/30">
+                  <h3 className="text-lg font-bold text-blue-200 mb-2">🗺️ Экспедиции</h3>
+                  <p className="text-sm text-blue-300 mb-2">
+                    Отправляйте грибников исследовать новые территории! Каждая экспедиция даёт уникальные награды.
                   </p>
-                  <p className="text-xs text-emerald-400">
-                    Новые грядки открываются с каждым престижем.
-                  </p>
+                  {game.expeditionBonus > 0 && (
+                    <div className="bg-blue-800/30 rounded-lg p-2 mt-2">
+                      <div className="text-xs text-blue-400">Бонус от экспедиций:</div>
+                      <div className="text-lg font-bold text-blue-200">+{(game.expeditionBonus * 100).toFixed(0)}% к производству</div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-2">
-                  {game.gardenPlots.map((plot) => {
-                    const unlocked = game.prestigeCount >= plot.unlockAtPrestige;
-                    const cost = getGardenCost(plot);
-                    const canAfford = game.spores >= cost;
-                    const maxed = plot.level >= plot.maxLevel;
+                  {game.expeditions.map((expedition) => {
+                    const unlocked = totalBuildings >= expedition.unlockAt;
+                    const canAfford = game.mushrooms >= expedition.cost;
+                    const now = Date.now();
+                    const timeLeft = expedition.active && expedition.startTime 
+                      ? Math.max(0, expedition.startTime + expedition.duration - now)
+                      : 0;
+                    const progress = expedition.active && expedition.startTime
+                      ? Math.min(100, ((now - expedition.startTime) / expedition.duration) * 100)
+                      : 0;
 
                     if (!unlocked) {
                       return (
                         <div
-                          key={plot.id}
+                          key={expedition.id}
                           className="flex items-center gap-3 p-3 rounded-lg border border-gray-700/30 bg-black/30 opacity-50"
                         >
                           <div className="text-3xl grayscale">🔒</div>
                           <div className="flex-1">
                             <div className="font-bold text-gray-400">???</div>
                             <div className="text-xs text-gray-500">
-                              Откроется после {plot.unlockAtPrestige} престиж{plot.unlockAtPrestige === 1 ? 'а' : 'ей'}
+                              Требуется {expedition.unlockAt} зданий всего
                             </div>
                           </div>
                         </div>
@@ -1179,49 +1177,66 @@ export default function App() {
 
                     return (
                       <div
-                        key={plot.id}
+                        key={expedition.id}
                         className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
-                          maxed
-                            ? 'border-yellow-600/50 bg-yellow-900/20'
+                          expedition.active
+                            ? 'border-blue-600/50 bg-blue-900/20'
                             : canAfford
-                            ? 'border-emerald-600/50 bg-emerald-900/20 hover:bg-emerald-900/40'
+                            ? 'border-blue-600/50 bg-blue-900/20 hover:bg-blue-900/40'
                             : 'border-gray-700/30 bg-black/20 opacity-70'
                         }`}
                       >
-                        <div className="text-3xl">{plot.emoji}</div>
+                        <div className="text-3xl">{expedition.emoji}</div>
                         <div className="flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-bold text-emerald-200">{plot.name}</span>
-                            <span className="text-xs bg-emerald-800/50 px-2 py-0.5 rounded-full">
-                              Ур. {plot.level}/{plot.maxLevel}
-                            </span>
+                            <span className="font-bold text-blue-200">{expedition.name}</span>
+                            {expedition.completed > 0 && (
+                              <span className="text-xs bg-green-800/50 px-2 py-0.5 rounded-full text-green-300">
+                                ✓{expedition.completed}
+                              </span>
+                            )}
                           </div>
-                          <div className="text-xs text-emerald-400">{plot.description}</div>
-                          {plot.level > 0 && (
-                            <div className="text-xs text-emerald-300 mt-1">
-                              Текущий бонус: +{(plot.effectValue * plot.level * 100).toFixed(0)}%
+                          <div className="text-xs text-blue-400">{expedition.description}</div>
+                          <div className="text-xs text-blue-300 mt-1">
+                            Награда: {
+                              expedition.reward === 'mushrooms' && `${formatNumber(expedition.rewardValue)} грибов` ||
+                              expedition.reward === 'multiplier' && `+${(expedition.rewardValue * 100).toFixed(0)}% к производству` ||
+                              expedition.reward === 'click' && `+${formatNumber(expedition.rewardValue)} к клику` ||
+                              expedition.reward === 'production' && `+${(expedition.rewardValue * 100).toFixed(0)}% к производству` ||
+                              expedition.reward === 'global' && `+${(expedition.rewardValue * 100).toFixed(0)}% ко всему` ||
+                              expedition.reward === 'massive' && `+${(expedition.rewardValue * 100).toFixed(0)}% ко всему`
+                            }
+                          </div>
+                          <div className="text-xs text-gray-400 mt-1">
+                            Время: {expedition.duration / 1000}с | Стоимость: {formatNumber(expedition.cost)} 🍄
+                          </div>
+                          {expedition.active && (
+                            <div className="mt-2">
+                              <div className="h-2 bg-blue-950 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all"
+                                  style={{ width: `${progress}%` }}
+                                />
+                              </div>
+                              <div className="text-xs text-blue-300 mt-1">
+                                Осталось: {Math.ceil(timeLeft / 1000)}с
+                              </div>
                             </div>
                           )}
-                          <div className="mt-1 h-1.5 bg-emerald-950 rounded-full overflow-hidden">
-                            <div
-                              className="h-full bg-gradient-to-r from-emerald-500 to-green-400 transition-all"
-                              style={{ width: `${(plot.level / plot.maxLevel) * 100}%` }}
-                            />
-                          </div>
                         </div>
-                        <button
-                          onClick={() => upgradeGardenPlot(plot.id)}
-                          disabled={!canAfford || maxed}
-                          className={`px-3 py-2 rounded font-bold text-sm transition-all ${
-                            maxed
-                              ? 'bg-yellow-700 text-yellow-200 cursor-default'
-                              : canAfford
-                              ? 'bg-emerald-600 hover:bg-emerald-500 text-white hover:scale-105'
-                              : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                          }`}
-                        >
-                          {maxed ? 'МАКС' : `${cost} 🌀`}
-                        </button>
+                        {!expedition.active && (
+                          <button
+                            onClick={() => startExpedition(expedition.id)}
+                            disabled={!canAfford}
+                            className={`px-4 py-2 rounded font-bold text-sm transition-all ${
+                              canAfford
+                                ? 'bg-blue-600 hover:bg-blue-500 text-white hover:scale-105'
+                                : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                            }`}
+                          >
+                            Начать
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -1280,7 +1295,7 @@ export default function App() {
               <div className="text-sm text-purple-400">спор</div>
             </div>
             <p className="text-sm text-emerald-300 mb-2">
-              ✅ Грядки и достижения сохраняются!
+              ✅ Экспедиции и достижения сохраняются!
             </p>
             <p className="text-sm text-red-300 mb-4">
               ⚠️ Все здания, улучшения и грибы будут сброшены.

@@ -35,18 +35,19 @@ export interface PrestigeUpgrade {
   effect: string;
 }
 
-export interface GardenPlot {
+export interface Expedition {
   id: string;
   name: string;
   description: string;
   emoji: string;
-  baseCost: number;
-  costMultiplier: number;
-  level: number;
-  maxLevel: number;
-  effect: string;
-  effectValue: number; // значение эффекта за уровень
-  unlockAtPrestige: number; // требуемое количество престижей
+  duration: number; // в миллисекундах
+  cost: number; // стоимость в грибах
+  reward: string;
+  rewardValue: number;
+  unlockAt: number; // требуемое количество зданий всего
+  active: boolean;
+  startTime: number | null;
+  completed: number; // сколько раз завершена
 }
 
 export interface GameState {
@@ -63,6 +64,7 @@ export interface GameState {
   prestigeUpgrades: PrestigeUpgrade[];
   clickMultiplier: number;
   globalMultiplier: number;
-  gardenPlots: GardenPlot[];
+  expeditions: Expedition[];
+  expeditionBonus: number; // бонус к производству от экспедиций
   lastSave: number;
 }
