@@ -35,6 +35,20 @@ export interface PrestigeUpgrade {
   effect: string;
 }
 
+export interface GardenPlot {
+  id: string;
+  name: string;
+  description: string;
+  emoji: string;
+  baseCost: number;
+  costMultiplier: number;
+  level: number;
+  maxLevel: number;
+  effect: string;
+  effectValue: number; // значение эффекта за уровень
+  unlockAtPrestige: number; // требуемое количество престижей
+}
+
 export interface GameState {
   mushrooms: number;
   totalMushrooms: number;
@@ -49,5 +63,6 @@ export interface GameState {
   prestigeUpgrades: PrestigeUpgrade[];
   clickMultiplier: number;
   globalMultiplier: number;
+  gardenPlots: GardenPlot[];
   lastSave: number;
 }

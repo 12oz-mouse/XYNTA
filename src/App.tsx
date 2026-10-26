@@ -3,12 +3,14 @@ import { GameState } from './types';
 import {
   initialBuildings,
   initialPrestigeUpgrades,
+  initialGardenPlots,
   formatNumber,
   getBuildingCost,
   calculatePrestigeSpores,
+  getGardenCost,
 } from './gameData';
 
-const SAVE_KEY = 'mushroom_empire_save_v3';
+const SAVE_KEY = 'mushroom_empire_save_v4';
 
 // Achievement definitions
 const ACHIEVEMENTS = [
@@ -27,6 +29,8 @@ const ACHIEVEMENTS = [
   { id: 'all_types', name: 'Коллекционер', desc: 'Иметь все типы зданий', emoji: '🎪', check: (g: GameState) => g.buildings.every(b => b.count > 0) },
   { id: 'combo_10', name: 'Комбо-мастер', desc: 'Достичь комбо ×10', emoji: '🔥', check: (_g: GameState) => false },
   { id: 'golden', name: 'Золотая лихорадка', desc: 'Поймать золотой гриб', emoji: '🌟', check: (_g: GameState) => false },
+  { id: 'first_garden', name: 'Садовник', desc: 'Посадить первую грядку', emoji: '🌱', check: (g: GameState) => g.gardenPlots.some(p => p.level > 0) },
+  { id: 'full_garden', name: 'Полный сад', desc: 'Все грядки хотя бы 5 уровня', emoji: '🏡', check: (g: GameState) => g.gardenPlots.filter(p => p.unlockAtPrestige <= g.prestigeCount).every(p => p.level >= 5) },
 ];
 
 // Building milestone bonuses
@@ -58,6 +62,10 @@ function getInitialState(): GameState {
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
+      // Migrate old saves
+      if (!parsed.gardenPlots) {
+        parsed.gardenPlots = initialGardenPlots.map(p => ({ ...p }));
+      }
       return { ...parsed, mushroomsPerSecond: 0, mushroomsPerClick: 1 };
     } catch {
       // ignore
@@ -77,13 +85,14 @@ function getInitialState(): GameState {
     prestigeUpgrades: initialPrestigeUpgrades.map((u) => ({ ...u })),
     clickMultiplier: 1,
     globalMultiplier: 1,
+    gardenPlots: initialGardenPlots.map((p) => ({ ...p })),
     lastSave: Date.now(),
   };
 }
 
 export default function App() {
   const [game, setGame] = useState<GameState>(getInitialState);
-  const [activeTab, setActiveTab] = useState<'buildings' | 'upgrades' | 'prestige' | 'achievements'>('buildings');
+  const [activeTab, setActiveTab] = useState<'buildings' | 'upgrades' | 'prestige' | 'garden' | 'achievements'>('buildings');
   const [clickEffects, setClickEffects] = useState<{ id: number; x: number; y: number; value: number; color?: string }[]>([]);
   const [showPrestigeConfirm, setShowPrestigeConfirm] = useState(false);
   const [mushroomScale, setMushroomScale] = useState(1);
@@ -131,6 +140,31 @@ export default function App() {
   const unlockedRef = useRef(unlockedAchievements);
   unlockedRef.current = unlockedAchievements;
 
+  // Garden bonuses calculation
+  const getGardenBonuses = useCallback(() => {
+    let productionBonus = 0;
+    let clickBonus = 0;
+    let sporeGainBonus = 0;
+    let doubleChance = 0;
+    let gardenAutoclick = 0;
+    let globalMulti = 1;
+
+    for (const plot of game.gardenPlots) {
+      if (plot.level === 0) continue;
+      const value = plot.effectValue * plot.level;
+      switch (plot.effect) {
+        case 'production': productionBonus += value; break;
+        case 'click': clickBonus += value; break;
+        case 'spore_gain': sporeGainBonus += value; break;
+        case 'double_chance': doubleChance += value; break;
+        case 'autoclick': gardenAutoclick += value; break;
+        case 'global_multi': globalMulti *= (1 + value); break;
+      }
+    }
+
+    return { productionBonus, clickBonus, sporeGainBonus, doubleChance, gardenAutoclick, globalMulti };
+  }, [game.gardenPlots]);
+
   // Calculate derived values
   const getDiscount = useCallback(() => {
     const discountUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_discount');
@@ -166,26 +200,39 @@ export default function App() {
     const boostUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_boost');
     const boostMulti = boostUpgrade ? 1 + boostUpgrade.level * 0.25 : 1;
     const eventMulti = getEventMultiplier('production');
-    return game.globalMultiplier * boostMulti * eventMulti;
-  }, [game.prestigeUpgrades, game.globalMultiplier, getEventMultiplier]);
+    const garden = getGardenBonuses();
+    const gardenMulti = (1 + garden.productionBonus) * garden.globalMulti;
+    
+    // Double chance from garden
+    const doubleMulti = Math.random() < garden.doubleChance ? 2 : 1;
+    
+    return game.globalMultiplier * boostMulti * eventMulti * gardenMulti * doubleMulti;
+  }, [game.prestigeUpgrades, game.globalMultiplier, getEventMultiplier, getGardenBonuses]);
 
   const getClickPower = useCallback(() => {
     const clickUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_click');
     const clickMulti = clickUpgrade ? 1 + clickUpgrade.level * 0.5 : 1;
-    const comboMulti = 1 + combo * 0.1; // +10% per combo level
+    const comboMulti = 1 + combo * 0.1;
     const eventMulti = getEventMultiplier('click');
-    return game.mushroomsPerClick * game.clickMultiplier * clickMulti * comboMulti * eventMulti;
-  }, [game.prestigeUpgrades, game.mushroomsPerClick, game.clickMultiplier, combo, getEventMultiplier]);
+    const garden = getGardenBonuses();
+    const gardenClickMulti = 1 + garden.clickBonus;
+    return game.mushroomsPerClick * game.clickMultiplier * clickMulti * comboMulti * eventMulti * gardenClickMulti;
+  }, [game.prestigeUpgrades, game.mushroomsPerClick, game.clickMultiplier, combo, getEventMultiplier, getGardenBonuses]);
 
   const getAutoClicks = useCallback(() => {
     const autoUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_autoclick');
-    return autoUpgrade ? autoUpgrade.level : 0;
-  }, [game.prestigeUpgrades]);
+    const prestigeAuto = autoUpgrade ? autoUpgrade.level : 0;
+    const garden = getGardenBonuses();
+    return prestigeAuto + garden.gardenAutoclick;
+  }, [game.prestigeUpgrades, getGardenBonuses]);
 
   const getSporeMultiplier = useCallback(() => {
     const megaUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_mega');
-    return megaUpgrade ? Math.pow(2, megaUpgrade.level) : 1;
-  }, [game.prestigeUpgrades]);
+    const megaMulti = megaUpgrade ? Math.pow(2, megaUpgrade.level) : 1;
+    const garden = getGardenBonuses();
+    const gardenMulti = 1 + garden.sporeGainBonus;
+    return megaMulti * gardenMulti;
+  }, [game.prestigeUpgrades, getGardenBonuses]);
 
   // Calculate MPS
   const calculateMPS = useCallback(() => {
@@ -195,8 +242,20 @@ export default function App() {
       const milestoneMulti = getBuildingMilestoneMultiplier(building.count);
       total += building.baseProduction * building.count * milestoneMulti;
     }
-    return total * multi;
-  }, [game.buildings, getProductionMultiplier, getBuildingMilestoneMultiplier]);
+    const baseProduction = total * multi;
+    
+    // Autoclicks (including garden) with click modifiers
+    const autoClicks = getAutoClicks();
+    const clickUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_click');
+    const clickMulti = clickUpgrade ? 1 + clickUpgrade.level * 0.5 : 1;
+    const garden = getGardenBonuses();
+    const gardenClickMulti = 1 + garden.clickBonus;
+    const eventClickMulti = getEventMultiplier('click');
+    const autoClickPower = game.mushroomsPerClick * game.clickMultiplier * clickMulti * gardenClickMulti * eventClickMulti;
+    const autoClickProduction = autoClicks * autoClickPower;
+    
+    return baseProduction + autoClickProduction;
+  }, [game.buildings, game.prestigeUpgrades, game.mushroomsPerClick, game.clickMultiplier, getProductionMultiplier, getBuildingMilestoneMultiplier, getAutoClicks, getGardenBonuses, getEventMultiplier]);
 
   // Game loop
   useEffect(() => {
@@ -214,7 +273,28 @@ export default function App() {
           }
         }
         
-        const multi = prev.globalMultiplier * boostMulti * eventMulti;
+        // Garden bonuses
+        let gardenProdBonus = 0;
+        let gardenGlobalMulti = 1;
+        let gardenAutoClick = 0;
+        let gardenClickBonus = 0;
+        let gardenDoubleChance = 0;
+        for (const plot of prev.gardenPlots) {
+          if (plot.level === 0) continue;
+          const value = plot.effectValue * plot.level;
+          switch (plot.effect) {
+            case 'production': gardenProdBonus += value; break;
+            case 'global_multi': gardenGlobalMulti *= (1 + value); break;
+            case 'autoclick': gardenAutoClick += value; break;
+            case 'click': gardenClickBonus += value; break;
+            case 'double_chance': gardenDoubleChance += value; break;
+          }
+        }
+        
+        const multi = prev.globalMultiplier * boostMulti * eventMulti * (1 + gardenProdBonus) * gardenGlobalMulti;
+        
+        // Double chance roll
+        const doubleRoll = Math.random() < gardenDoubleChance ? 2 : 1;
 
         let production = 0;
         for (const building of prev.buildings) {
@@ -224,14 +304,26 @@ export default function App() {
           }
           production += building.baseProduction * building.count * milestoneMulti;
         }
-        production *= multi;
+        production *= multi * doubleRoll;
 
-        const autoClickUpgrade = prev.prestigeUpgrades.find((u) => u.id === 'spore_autoclick');
-        const autoClicks = autoClickUpgrade ? autoClickUpgrade.level : 0;
+        // Autoclicks with all click modifiers
+        const autoUpgrade = prev.prestigeUpgrades.find((u) => u.id === 'spore_autoclick');
+        const prestigeAuto = autoUpgrade ? autoUpgrade.level : 0;
+        const totalAutoClicks = prestigeAuto + gardenAutoClick;
+        
         const clickUpgrade = prev.prestigeUpgrades.find((u) => u.id === 'spore_click');
         const clickMulti = clickUpgrade ? 1 + clickUpgrade.level * 0.5 : 1;
-        const clickPower = prev.mushroomsPerClick * prev.clickMultiplier * clickMulti;
-        const autoClickProduction = autoClicks * clickPower;
+        
+        // Event click multiplier
+        let eventClickMulti = 1;
+        for (const ae of activeEventsRef.current) {
+          if (ae.endsAt > now && ae.event.type === 'click') {
+            eventClickMulti *= ae.event.multi;
+          }
+        }
+        
+        const autoClickPower = prev.mushroomsPerClick * prev.clickMultiplier * clickMulti * (1 + gardenClickBonus) * eventClickMulti;
+        const autoClickProduction = totalAutoClicks * autoClickPower;
 
         const totalGain = (production + autoClickProduction) / 10;
 
@@ -251,14 +343,13 @@ export default function App() {
   // Golden mushroom spawner
   useEffect(() => {
     const spawnGolden = () => {
-      const delay = 30000 + Math.random() * 60000; // 30-90 seconds
+      const delay = 30000 + Math.random() * 60000;
       const timeout = setTimeout(() => {
         const id = goldenIdRef.current++;
         const x = 10 + Math.random() * 80;
         const y = 10 + Math.random() * 70;
         setGoldenMushrooms(prev => [...prev, { id, x, y, createdAt: Date.now() }]);
         
-        // Auto-remove after 10 seconds
         setTimeout(() => {
           setGoldenMushrooms(prev => prev.filter(g => g.id !== id));
         }, 10000);
@@ -275,7 +366,7 @@ export default function App() {
   // Random event spawner
   useEffect(() => {
     const spawnEvent = () => {
-      const delay = 45000 + Math.random() * 90000; // 45-135 seconds
+      const delay = 45000 + Math.random() * 90000;
       const timeout = setTimeout(() => {
         const event = RANDOM_EVENTS[Math.floor(Math.random() * RANDOM_EVENTS.length)];
         const endsAt = Date.now() + event.duration;
@@ -283,7 +374,6 @@ export default function App() {
         setNotification(`${event.emoji} ${event.name}: ${event.desc}`);
         setTimeout(() => setNotification(null), 3000);
         
-        // Clean up expired events
         setTimeout(() => {
           setActiveEvents(prev => prev.filter(ae => ae.endsAt > Date.now()));
         }, event.duration + 100);
@@ -293,7 +383,6 @@ export default function App() {
       return timeout;
     };
     
-    // Start after 60 seconds
     const initialTimeout = setTimeout(() => {
       spawnEvent();
     }, 60000);
@@ -342,7 +431,6 @@ export default function App() {
       const timeSinceLastClick = now - lastClickTime;
       setLastClickTime(now);
       
-      // Combo system
       if (timeSinceLastClick < 500) {
         setCombo(prev => {
           const newCombo = prev + 1;
@@ -361,7 +449,6 @@ export default function App() {
         setCombo(0);
       }
       
-      // Reset combo after 2 seconds of no clicks
       if (comboTimer) clearTimeout(comboTimer);
       const timer = window.setTimeout(() => setCombo(0), 2000);
       setComboTimer(timer);
@@ -394,7 +481,6 @@ export default function App() {
   const handleGoldenClick = useCallback((golden: GoldenMushroom) => {
     setGoldenMushrooms(prev => prev.filter(g => g.id !== golden.id));
     
-    // Award bonus: 10x current MPS or 100 mushrooms, whichever is higher
     const mps = calculateMPS();
     const bonus = Math.max(mps * 60, 100, game.mushrooms * 0.1);
     
@@ -408,7 +494,6 @@ export default function App() {
     setNotification(`🌟 Золотой гриб! +${formatNumber(bonus)} грибов!`);
     setTimeout(() => setNotification(null), 3000);
     
-    // Unlock achievement
     if (!unlockedRef.current.has('golden')) {
       setUnlockedAchievements(prev => {
         const next = new Set(prev);
@@ -442,7 +527,6 @@ export default function App() {
     });
   }, []);
 
-  // Buy 10 buildings
   const buyBuilding10 = useCallback((buildingId: string) => {
     setGame((prev) => {
       const discount = (() => {
@@ -484,7 +568,6 @@ export default function App() {
     { id: 'click10', name: 'Космический удар', cost: 50000000000, power: 5000000, emoji: '☄️', unlockAt: 10000000000 },
   ];
 
-  // Multiplier upgrades
   const multiUpgrades = [
     { id: 'multi1', name: 'Удобрение', cost: 1000, multi: 2, emoji: '💩', unlockAt: 500 },
     { id: 'multi2', name: 'Полив', cost: 10000, multi: 2, emoji: '💧', unlockAt: 5000 },
@@ -522,8 +605,8 @@ export default function App() {
 
   // Prestige
   const getPrestigeSporesGain = useCallback(() => {
-    return calculatePrestigeSpores(game.totalMushrooms, game.totalSpores, getSporeMultiplier());
-  }, [game.totalMushrooms, game.totalSpores, getSporeMultiplier]);
+    return calculatePrestigeSpores(game.totalMushrooms, getSporeMultiplier());
+  }, [game.totalMushrooms, getSporeMultiplier]);
 
   const doPrestige = useCallback(() => {
     const sporesGain = getPrestigeSporesGain();
@@ -544,6 +627,7 @@ export default function App() {
       prestigeCount: prev.prestigeCount + 1,
       clickMultiplier: 1,
       globalMultiplier: 1,
+      // gardenPlots сохраняются!
     }));
     setPurchasedUpgrades(new Set());
     setShowPrestigeConfirm(false);
@@ -580,10 +664,31 @@ export default function App() {
     });
   }, []);
 
+  // Buy/upgrade garden plot
+  const upgradeGardenPlot = useCallback((plotId: string) => {
+    setGame((prev) => {
+      const plot = prev.gardenPlots.find((p) => p.id === plotId);
+      if (!plot || plot.level >= plot.maxLevel) return prev;
+      const cost = getGardenCost(plot);
+      if (prev.spores < cost) return prev;
+
+      const newPlots = prev.gardenPlots.map((p) =>
+        p.id === plotId ? { ...p, level: p.level + 1 } : p
+      );
+
+      return {
+        ...prev,
+        spores: prev.spores - cost,
+        gardenPlots: newPlots,
+      };
+    });
+  }, []);
+
   const mps = calculateMPS();
   const clickPower = getClickPower();
   const prestigeGain = getPrestigeSporesGain();
   const comboMulti = 1 + combo * 0.1;
+  const gardenBonuses = getGardenBonuses();
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-green-950 via-green-900 to-emerald-950 text-white font-sans relative overflow-hidden">
@@ -592,7 +697,7 @@ export default function App() {
         <button
           key={golden.id}
           onClick={() => handleGoldenClick(golden)}
-          className="absolute z-40 text-5xl cursor-pointer animate-bounce hover:scale-125 transition-transform drop-shadow-[0_0_15px_rgba(255,215,0,0.8)]"
+          className="absolute z-40 text-5xl cursor-pointer hover:scale-125 transition-transform drop-shadow-[0_0_15px_rgba(255,215,0,0.8)]"
           style={{
             left: `${golden.x}%`,
             top: `${golden.y}%`,
@@ -652,7 +757,7 @@ export default function App() {
       </header>
 
       <div className="max-w-7xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Left panel - Mushroom click area */}
+        {/* Left panel */}
         <div className="lg:col-span-1">
           <div className="bg-black/20 rounded-xl p-6 border border-green-700/30 backdrop-blur-sm">
             {/* Combo display */}
@@ -660,7 +765,7 @@ export default function App() {
               <div className={`text-center mb-2 font-bold text-lg transition-all ${
                 combo >= 10 ? 'text-red-400 scale-110' : combo >= 5 ? 'text-orange-400' : 'text-yellow-300'
               }`}>
-                🔥 КОМБО ×{combo} (+{Math.round((comboMulti - 1) * 100)}% к клику)
+                🔥 КОМБО ×{combo} (+{Math.round((comboMulti - 1) * 100)}%)
               </div>
             )}
             
@@ -674,7 +779,6 @@ export default function App() {
                 <div className="text-8xl md:text-9xl drop-shadow-2xl hover:drop-shadow-[0_0_30px_rgba(34,197,94,0.5)] transition-all mushroom-glow">
                   🍄
                 </div>
-                {/* Click effects */}
                 {clickEffects.map((effect) => (
                   <div
                     key={effect.id}
@@ -703,12 +807,12 @@ export default function App() {
               </div>
               <div className="flex justify-between">
                 <span className="text-green-400">Множитель:</span>
-                <span className="font-bold">×{getProductionMultiplier().toFixed(2)}</span>
+                <span className="font-bold">×{(game.globalMultiplier * (1 + gardenBonuses.productionBonus) * gardenBonuses.globalMulti).toFixed(2)}</span>
               </div>
               {getAutoClicks() > 0 && (
                 <div className="flex justify-between">
                   <span className="text-green-400">Автокликов:</span>
-                  <span className="font-bold">{getAutoClicks()}/с</span>
+                  <span className="font-bold">{getAutoClicks().toFixed(1)}/с</span>
                 </div>
               )}
               <div className="flex justify-between">
@@ -732,28 +836,24 @@ export default function App() {
               </button>
               {prestigeGain <= 0 && (
                 <p className="text-xs text-gray-400 mt-1 text-center">
-                  Нужно 1M+ грибов за забег для престижа
+                  Нужно 1M+ грибов за забег
                 </p>
               )}
             </div>
 
-            {/* Milestone info */}
-            <div className="mt-4 pt-4 border-t border-green-700/20">
-              <p className="text-xs text-green-500 mb-1">💡 Бонусы за здания (×2 за порог):</p>
-              <div className="flex flex-wrap gap-1">
-                {BUILDING_MILESTONES.map((m) => (
-                  <span key={m} className="text-xs bg-green-900/30 px-2 py-0.5 rounded text-green-400">
-                    {m}
-                  </span>
-                ))}
-              </div>
-              <p className="text-xs text-yellow-500 mt-2">🌟 Ловите золотые грибы для бонусов!</p>
-              <p className="text-xs text-orange-400 mt-1">🔥 Быстрые клики = комбо-множитель!</p>
+            {/* Info */}
+            <div className="mt-4 pt-4 border-t border-green-700/20 space-y-1">
+              <p className="text-xs text-green-500">💡 Бонусы за здания: ×2 при 10/25/50/100/150/200</p>
+              <p className="text-xs text-yellow-500">🌟 Ловите золотые грибы для бонусов!</p>
+              <p className="text-xs text-orange-400">🔥 Быстрые клики = комбо-множитель!</p>
+              {game.prestigeCount > 0 && (
+                <p className="text-xs text-purple-400">🌱 Проверьте вкладку «Грядки»!</p>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Right panel - Tabs */}
+        {/* Right panel */}
         <div className="lg:col-span-2">
           {/* Tabs */}
           <div className="flex gap-1 mb-4 overflow-x-auto">
@@ -787,6 +887,18 @@ export default function App() {
             >
               🌀 Престиж
             </button>
+            {game.prestigeCount > 0 && (
+              <button
+                onClick={() => setActiveTab('garden')}
+                className={`px-4 py-2 rounded-t-lg font-bold transition-all whitespace-nowrap ${
+                  activeTab === 'garden'
+                    ? 'bg-emerald-700/50 text-emerald-200 border-b-2 border-emerald-400'
+                    : 'bg-black/20 text-emerald-400 hover:bg-black/30'
+                }`}
+              >
+                🌱 Грядки
+              </button>
+            )}
             <button
               onClick={() => setActiveTab('achievements')}
               className={`px-4 py-2 rounded-t-lg font-bold transition-all whitespace-nowrap ${
@@ -953,13 +1065,16 @@ export default function App() {
                 <div className="bg-purple-900/30 rounded-lg p-4 border border-purple-700/30">
                   <h3 className="text-lg font-bold text-purple-200 mb-2">🌀 Система Престижа</h3>
                   <p className="text-sm text-purple-300 mb-2">
-                    Сбросьте прогресс, чтобы получить <span className="font-bold text-purple-200">Споры</span> — 
-                    специальную валюту для постоянных улучшений.
+                    Сбросьте прогресс, чтобы получить <span className="font-bold text-purple-200">Споры</span>.
+                    Количество спор зависит от грибов, собранных <b>в текущем забеге</b>.
                   </p>
-                  <p className="text-sm text-purple-300 mb-2">
-                    Количество получаемых спор зависит от общего количества собранных грибов за текущий забег.
-                  </p>
-                  <div className="grid grid-cols-2 gap-4 text-sm mt-3">
+                  <div className="bg-purple-800/30 rounded-lg p-3 my-3">
+                    <div className="text-center">
+                      <div className="text-xs text-purple-400">Споры за следующий престиж:</div>
+                      <div className="text-2xl font-bold text-purple-200">+{formatNumber(prestigeGain)} 🌀</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                       <span className="text-purple-400">Всего спор:</span>{' '}
                       <span className="font-bold text-purple-200">{formatNumber(game.totalSpores)}</span>
@@ -998,7 +1113,6 @@ export default function App() {
                               </span>
                             </div>
                             <div className="text-xs text-purple-400">{upgrade.description}</div>
-                            {/* Progress bar */}
                             <div className="mt-1 h-1.5 bg-purple-950 rounded-full overflow-hidden">
                               <div
                                 className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all"
@@ -1023,6 +1137,94 @@ export default function App() {
                       );
                     })}
                   </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'garden' && (
+              <div className="space-y-4">
+                <div className="bg-emerald-900/30 rounded-lg p-4 border border-emerald-700/30">
+                  <h3 className="text-lg font-bold text-emerald-200 mb-2">🌱 Грибные Грядки</h3>
+                  <p className="text-sm text-emerald-300 mb-2">
+                    Улучшайте грядки за споры. Они дают <b>постоянные бонусы</b>, которые не сбрасываются при престиже!
+                  </p>
+                  <p className="text-xs text-emerald-400">
+                    Новые грядки открываются с каждым престижем.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  {game.gardenPlots.map((plot) => {
+                    const unlocked = game.prestigeCount >= plot.unlockAtPrestige;
+                    const cost = getGardenCost(plot);
+                    const canAfford = game.spores >= cost;
+                    const maxed = plot.level >= plot.maxLevel;
+
+                    if (!unlocked) {
+                      return (
+                        <div
+                          key={plot.id}
+                          className="flex items-center gap-3 p-3 rounded-lg border border-gray-700/30 bg-black/30 opacity-50"
+                        >
+                          <div className="text-3xl grayscale">🔒</div>
+                          <div className="flex-1">
+                            <div className="font-bold text-gray-400">???</div>
+                            <div className="text-xs text-gray-500">
+                              Откроется после {plot.unlockAtPrestige} престиж{plot.unlockAtPrestige === 1 ? 'а' : 'ей'}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div
+                        key={plot.id}
+                        className={`flex items-center gap-3 p-3 rounded-lg border transition-all ${
+                          maxed
+                            ? 'border-yellow-600/50 bg-yellow-900/20'
+                            : canAfford
+                            ? 'border-emerald-600/50 bg-emerald-900/20 hover:bg-emerald-900/40'
+                            : 'border-gray-700/30 bg-black/20 opacity-70'
+                        }`}
+                      >
+                        <div className="text-3xl">{plot.emoji}</div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-emerald-200">{plot.name}</span>
+                            <span className="text-xs bg-emerald-800/50 px-2 py-0.5 rounded-full">
+                              Ур. {plot.level}/{plot.maxLevel}
+                            </span>
+                          </div>
+                          <div className="text-xs text-emerald-400">{plot.description}</div>
+                          {plot.level > 0 && (
+                            <div className="text-xs text-emerald-300 mt-1">
+                              Текущий бонус: +{(plot.effectValue * plot.level * 100).toFixed(0)}%
+                            </div>
+                          )}
+                          <div className="mt-1 h-1.5 bg-emerald-950 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-emerald-500 to-green-400 transition-all"
+                              style={{ width: `${(plot.level / plot.maxLevel) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => upgradeGardenPlot(plot.id)}
+                          disabled={!canAfford || maxed}
+                          className={`px-3 py-2 rounded font-bold text-sm transition-all ${
+                            maxed
+                              ? 'bg-yellow-700 text-yellow-200 cursor-default'
+                              : canAfford
+                              ? 'bg-emerald-600 hover:bg-emerald-500 text-white hover:scale-105'
+                              : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+                          }`}
+                        >
+                          {maxed ? 'МАКС' : `${cost} 🌀`}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1071,14 +1273,17 @@ export default function App() {
           <div className="bg-gradient-to-b from-purple-900 to-purple-950 rounded-xl p-6 max-w-md w-full border border-purple-600/50 shadow-2xl">
             <h2 className="text-2xl font-bold text-purple-200 mb-4">🌀 Подтвердить Престиж?</h2>
             <p className="text-purple-300 mb-4">
-              Весь ваш прогресс будет сброшен, но вы получите:
+              Грибы, здания и улучшения будут сброшены. Вы получите:
             </p>
             <div className="bg-purple-800/30 rounded-lg p-4 mb-4 text-center">
               <div className="text-3xl font-bold text-purple-200">+{formatNumber(prestigeGain)} 🌀</div>
               <div className="text-sm text-purple-400">спор</div>
             </div>
+            <p className="text-sm text-emerald-300 mb-2">
+              ✅ Грядки и достижения сохраняются!
+            </p>
             <p className="text-sm text-red-300 mb-4">
-              ⚠️ Все здания, улучшения и грибы будут сброшены! Достижения сохраняются.
+              ⚠️ Все здания, улучшения и грибы будут сброшены.
             </p>
             <div className="flex gap-3">
               <button
@@ -1098,7 +1303,6 @@ export default function App() {
         </div>
       )}
 
-      {/* CSS for animations */}
       <style>{`
         @keyframes floatUp {
           0% { opacity: 1; transform: translateY(0) scale(1); }

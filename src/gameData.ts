@@ -1,4 +1,4 @@
-import { Building, PrestigeUpgrade } from './types';
+import { Building, PrestigeUpgrade, GardenPlot } from './types';
 
 export const initialBuildings: Building[] = [
   {
@@ -226,8 +226,95 @@ export function getBuildingCost(building: Building, discount: number = 0): numbe
   return Math.floor(rawCost * (1 - discount));
 }
 
-export function calculatePrestigeSpores(totalMushrooms: number, currentSpores: number, sporeMulti: number): number {
+export function calculatePrestigeSpores(totalMushrooms: number, sporeMulti: number): number {
+  // Формула: споры за текущий забег = floor(sqrt(totalMushrooms / 1M)) * multiplier
+  // Каждый престиж считается заново от текущего забега
   const base = Math.floor(Math.pow(totalMushrooms / 1000000, 0.5));
-  const newSpores = Math.max(0, base - currentSpores);
-  return Math.floor(newSpores * sporeMulti);
+  return Math.floor(base * sporeMulti);
+}
+
+// Грибные грядки - пост-престижная механика
+export const initialGardenPlots: GardenPlot[] = [
+  {
+    id: 'champignon',
+    name: 'Шампиньонная грядка',
+    description: '+3% к производству за уровень',
+    emoji: '🍄',
+    baseCost: 5,
+    costMultiplier: 1.8,
+    level: 0,
+    maxLevel: 50,
+    effect: 'production',
+    effectValue: 0.03,
+    unlockAtPrestige: 1,
+  },
+  {
+    id: 'chanterelle',
+    name: 'Лисичковая грядка',
+    description: '+5% к силе клика за уровень',
+    emoji: '🌿',
+    baseCost: 8,
+    costMultiplier: 1.8,
+    level: 0,
+    maxLevel: 50,
+    effect: 'click',
+    effectValue: 0.05,
+    unlockAtPrestige: 1,
+  },
+  {
+    id: 'truffle',
+    name: 'Трюфельная грядка',
+    description: '+2% ко всем спорам за уровень',
+    emoji: '💎',
+    baseCost: 15,
+    costMultiplier: 2.0,
+    level: 0,
+    maxLevel: 30,
+    effect: 'spore_gain',
+    effectValue: 0.02,
+    unlockAtPrestige: 2,
+  },
+  {
+    id: 'golden',
+    name: 'Золотая грядка',
+    description: '+1% шанс ×2 производства за уровень',
+    emoji: '🌟',
+    baseCost: 25,
+    costMultiplier: 2.2,
+    level: 0,
+    maxLevel: 20,
+    effect: 'double_chance',
+    effectValue: 0.01,
+    unlockAtPrestige: 3,
+  },
+  {
+    id: 'lightning',
+    name: 'Грозовая грядка',
+    description: '+0.5 автоклика/сек за уровень',
+    emoji: '⚡',
+    baseCost: 40,
+    costMultiplier: 2.5,
+    level: 0,
+    maxLevel: 20,
+    effect: 'autoclick',
+    effectValue: 0.5,
+    unlockAtPrestige: 4,
+  },
+  {
+    id: 'mystic',
+    name: 'Мистическая грядка',
+    description: '×1.05 ко всему производству за уровень',
+    emoji: '🔮',
+    baseCost: 100,
+    costMultiplier: 3.0,
+    level: 0,
+    maxLevel: 15,
+    effect: 'global_multi',
+    effectValue: 0.05,
+    unlockAtPrestige: 5,
+  },
+];
+
+export function getGardenCost(plot: GardenPlot): number {
+  return Math.floor(plot.baseCost * Math.pow(plot.costMultiplier, plot.level));
 }
