@@ -945,7 +945,7 @@ export default function App() {
                               : 'bg-gray-700 text-gray-400 cursor-not-allowed'
                           }`}
                         >
-                          ×1 {formatNumber(cost)}
+                          {formatNumber(cost)} 🍄
                         </button>
                         <button
                           onClick={() => buyBuilding10(building.id)}
