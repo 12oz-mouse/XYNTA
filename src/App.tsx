@@ -8,7 +8,7 @@ import {
   calculatePrestigeSpores,
 } from './gameData';
 
-const SAVE_KEY = 'mushroom_empire_save_v2';
+const SAVE_KEY = 'mushroom_empire_save_v3';
 
 // Achievement definitions
 const ACHIEVEMENTS = [
@@ -25,10 +25,33 @@ const ACHIEVEMENTS = [
   { id: 'five_prestige', name: 'Ветеран', desc: 'Выполнить 5 престижей', emoji: '⭐', check: (g: GameState) => g.prestigeCount >= 5 },
   { id: 'ten_prestige', name: 'Легенда', desc: 'Выполнить 10 престижей', emoji: '🌟', check: (g: GameState) => g.prestigeCount >= 10 },
   { id: 'all_types', name: 'Коллекционер', desc: 'Иметь все типы зданий', emoji: '🎪', check: (g: GameState) => g.buildings.every(b => b.count > 0) },
+  { id: 'combo_10', name: 'Комбо-мастер', desc: 'Достичь комбо ×10', emoji: '🔥', check: (_g: GameState) => false },
+  { id: 'golden', name: 'Золотая лихорадка', desc: 'Поймать золотой гриб', emoji: '🌟', check: (_g: GameState) => false },
 ];
 
 // Building milestone bonuses
 const BUILDING_MILESTONES = [10, 25, 50, 100, 150, 200];
+
+// Random events
+const RANDOM_EVENTS = [
+  { id: 'spore_rain', name: 'Дождь спор', desc: 'Производство ×3 на 15 сек!', emoji: '🌧️', duration: 15000, multi: 3 },
+  { id: 'sunshine', name: 'Солнечный день', desc: 'Клик ×5 на 10 сек!', emoji: '☀️', duration: 10000, multi: 5, type: 'click' },
+  { id: 'mycelium_surge', name: 'Всплеск мицелия', desc: 'Производство ×2 на 20 сек!', emoji: '🌿', duration: 20000, multi: 2 },
+  { id: 'lucky_day', name: 'Удачный день', desc: 'Всё ×4 на 8 сек!', emoji: '🍀', duration: 8000, multi: 4 },
+  { id: 'mushroom_frenzy', name: 'Грибное безумие', desc: 'Производство ×5 на 10 сек!', emoji: '🎪', duration: 10000, multi: 5 },
+];
+
+interface GoldenMushroom {
+  id: number;
+  x: number;
+  y: number;
+  createdAt: number;
+}
+
+interface ActiveEvent {
+  event: typeof RANDOM_EVENTS[0];
+  endsAt: number;
+}
 
 function getInitialState(): GameState {
   const saved = localStorage.getItem(SAVE_KEY);
@@ -61,13 +84,22 @@ function getInitialState(): GameState {
 export default function App() {
   const [game, setGame] = useState<GameState>(getInitialState);
   const [activeTab, setActiveTab] = useState<'buildings' | 'upgrades' | 'prestige' | 'achievements'>('buildings');
-  const [clickEffects, setClickEffects] = useState<{ id: number; x: number; y: number; value: number }[]>([]);
+  const [clickEffects, setClickEffects] = useState<{ id: number; x: number; y: number; value: number; color?: string }[]>([]);
   const [showPrestigeConfirm, setShowPrestigeConfirm] = useState(false);
   const [mushroomScale, setMushroomScale] = useState(1);
   const [notification, setNotification] = useState<string | null>(null);
+  const [goldenMushrooms, setGoldenMushrooms] = useState<GoldenMushroom[]>([]);
+  const [activeEvents, setActiveEvents] = useState<ActiveEvent[]>([]);
+  const [combo, setCombo] = useState(0);
+  const [comboTimer, setComboTimer] = useState<number | null>(null);
+  const [lastClickTime, setLastClickTime] = useState(0);
+  
   const effectIdRef = useRef(0);
+  const goldenIdRef = useRef(0);
   const gameRef = useRef(game);
   gameRef.current = game;
+  const activeEventsRef = useRef(activeEvents);
+  activeEventsRef.current = activeEvents;
 
   const [purchasedUpgrades, setPurchasedUpgrades] = useState<Set<string>>(() => {
     const saved = localStorage.getItem(SAVE_KEY);
@@ -96,6 +128,8 @@ export default function App() {
     }
     return new Set();
   });
+  const unlockedRef = useRef(unlockedAchievements);
+  unlockedRef.current = unlockedAchievements;
 
   // Calculate derived values
   const getDiscount = useCallback(() => {
@@ -113,17 +147,35 @@ export default function App() {
     return multi;
   }, []);
 
+  const getEventMultiplier = useCallback((type: 'production' | 'click' | 'all'): number => {
+    const now = Date.now();
+    let multi = 1;
+    for (const ae of activeEventsRef.current) {
+      if (ae.endsAt > now) {
+        if (ae.event.type === 'click' && (type === 'click' || type === 'all')) {
+          multi *= ae.event.multi;
+        } else if (!ae.event.type && (type === 'production' || type === 'all')) {
+          multi *= ae.event.multi;
+        }
+      }
+    }
+    return multi;
+  }, []);
+
   const getProductionMultiplier = useCallback(() => {
     const boostUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_boost');
     const boostMulti = boostUpgrade ? 1 + boostUpgrade.level * 0.25 : 1;
-    return game.globalMultiplier * boostMulti;
-  }, [game.prestigeUpgrades, game.globalMultiplier]);
+    const eventMulti = getEventMultiplier('production');
+    return game.globalMultiplier * boostMulti * eventMulti;
+  }, [game.prestigeUpgrades, game.globalMultiplier, getEventMultiplier]);
 
   const getClickPower = useCallback(() => {
     const clickUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_click');
     const clickMulti = clickUpgrade ? 1 + clickUpgrade.level * 0.5 : 1;
-    return game.mushroomsPerClick * game.clickMultiplier * clickMulti;
-  }, [game.prestigeUpgrades, game.mushroomsPerClick, game.clickMultiplier]);
+    const comboMulti = 1 + combo * 0.1; // +10% per combo level
+    const eventMulti = getEventMultiplier('click');
+    return game.mushroomsPerClick * game.clickMultiplier * clickMulti * comboMulti * eventMulti;
+  }, [game.prestigeUpgrades, game.mushroomsPerClick, game.clickMultiplier, combo, getEventMultiplier]);
 
   const getAutoClicks = useCallback(() => {
     const autoUpgrade = game.prestigeUpgrades.find((u) => u.id === 'spore_autoclick');
@@ -152,7 +204,17 @@ export default function App() {
       setGame((prev) => {
         const boostUpgrade = prev.prestigeUpgrades.find((u) => u.id === 'spore_boost');
         const boostMulti = boostUpgrade ? 1 + boostUpgrade.level * 0.25 : 1;
-        const multi = prev.globalMultiplier * boostMulti;
+        
+        // Event multiplier
+        const now = Date.now();
+        let eventMulti = 1;
+        for (const ae of activeEventsRef.current) {
+          if (ae.endsAt > now && !ae.event.type) {
+            eventMulti *= ae.event.multi;
+          }
+        }
+        
+        const multi = prev.globalMultiplier * boostMulti * eventMulti;
 
         let production = 0;
         for (const building of prev.buildings) {
@@ -186,14 +248,66 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Golden mushroom spawner
+  useEffect(() => {
+    const spawnGolden = () => {
+      const delay = 30000 + Math.random() * 60000; // 30-90 seconds
+      const timeout = setTimeout(() => {
+        const id = goldenIdRef.current++;
+        const x = 10 + Math.random() * 80;
+        const y = 10 + Math.random() * 70;
+        setGoldenMushrooms(prev => [...prev, { id, x, y, createdAt: Date.now() }]);
+        
+        // Auto-remove after 10 seconds
+        setTimeout(() => {
+          setGoldenMushrooms(prev => prev.filter(g => g.id !== id));
+        }, 10000);
+        
+        spawnGolden();
+      }, delay);
+      return timeout;
+    };
+    
+    const timeout = spawnGolden();
+    return () => clearTimeout(timeout);
+  }, []);
+
+  // Random event spawner
+  useEffect(() => {
+    const spawnEvent = () => {
+      const delay = 45000 + Math.random() * 90000; // 45-135 seconds
+      const timeout = setTimeout(() => {
+        const event = RANDOM_EVENTS[Math.floor(Math.random() * RANDOM_EVENTS.length)];
+        const endsAt = Date.now() + event.duration;
+        setActiveEvents(prev => [...prev, { event, endsAt }]);
+        setNotification(`${event.emoji} ${event.name}: ${event.desc}`);
+        setTimeout(() => setNotification(null), 3000);
+        
+        // Clean up expired events
+        setTimeout(() => {
+          setActiveEvents(prev => prev.filter(ae => ae.endsAt > Date.now()));
+        }, event.duration + 100);
+        
+        spawnEvent();
+      }, delay);
+      return timeout;
+    };
+    
+    // Start after 60 seconds
+    const initialTimeout = setTimeout(() => {
+      spawnEvent();
+    }, 60000);
+    
+    return () => clearTimeout(initialTimeout);
+  }, []);
+
   // Achievement checker
   useEffect(() => {
     const interval = setInterval(() => {
       const currentGame = gameRef.current;
-      let newAchievement = false;
       
       for (const achievement of ACHIEVEMENTS) {
-        if (!unlockedAchievements.has(achievement.id) && achievement.check(currentGame)) {
+        if (!unlockedRef.current.has(achievement.id) && achievement.check(currentGame)) {
           setUnlockedAchievements(prev => {
             const next = new Set(prev);
             next.add(achievement.id);
@@ -201,13 +315,12 @@ export default function App() {
           });
           setNotification(`${achievement.emoji} Достижение: ${achievement.name}!`);
           setTimeout(() => setNotification(null), 3000);
-          newAchievement = true;
         }
       }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [unlockedAchievements]);
+  }, []);
 
   // Auto-save
   useEffect(() => {
@@ -215,16 +328,44 @@ export default function App() {
       const saveData = {
         ...gameRef.current,
         purchasedUpgradeIds: Array.from(purchasedUpgradesRef.current),
-        achievements: Array.from(unlockedAchievements),
+        achievements: Array.from(unlockedRef.current),
       };
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
     }, 5000);
     return () => clearInterval(interval);
-  }, [unlockedAchievements]);
+  }, []);
 
   // Click handler
   const handleMushroomClick = useCallback(
     (e: React.MouseEvent) => {
+      const now = Date.now();
+      const timeSinceLastClick = now - lastClickTime;
+      setLastClickTime(now);
+      
+      // Combo system
+      if (timeSinceLastClick < 500) {
+        setCombo(prev => {
+          const newCombo = prev + 1;
+          if (newCombo === 10 && !unlockedRef.current.has('combo_10')) {
+            setUnlockedAchievements(prev => {
+              const next = new Set(prev);
+              next.add('combo_10');
+              return next;
+            });
+            setNotification('🔥 Достижение: Комбо-мастер!');
+            setTimeout(() => setNotification(null), 3000);
+          }
+          return newCombo;
+        });
+      } else {
+        setCombo(0);
+      }
+      
+      // Reset combo after 2 seconds of no clicks
+      if (comboTimer) clearTimeout(comboTimer);
+      const timer = window.setTimeout(() => setCombo(0), 2000);
+      setComboTimer(timer);
+
       const power = getClickPower();
       setGame((prev) => ({
         ...prev,
@@ -240,13 +381,42 @@ export default function App() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const id = effectIdRef.current++;
-      setClickEffects((prev) => [...prev, { id, x, y, value: power }]);
+      const color = combo >= 10 ? 'text-red-400' : combo >= 5 ? 'text-orange-400' : 'text-yellow-300';
+      setClickEffects((prev) => [...prev, { id, x, y, value: power, color }]);
       setTimeout(() => {
         setClickEffects((prev) => prev.filter((e) => e.id !== id));
       }, 1000);
     },
-    [getClickPower]
+    [getClickPower, combo, comboTimer, lastClickTime]
   );
+
+  // Golden mushroom click
+  const handleGoldenClick = useCallback((golden: GoldenMushroom) => {
+    setGoldenMushrooms(prev => prev.filter(g => g.id !== golden.id));
+    
+    // Award bonus: 10x current MPS or 100 mushrooms, whichever is higher
+    const mps = calculateMPS();
+    const bonus = Math.max(mps * 60, 100, game.mushrooms * 0.1);
+    
+    setGame(prev => ({
+      ...prev,
+      mushrooms: prev.mushrooms + bonus,
+      totalMushrooms: prev.totalMushrooms + bonus,
+      totalMushroomsAllTime: prev.totalMushroomsAllTime + bonus,
+    }));
+    
+    setNotification(`🌟 Золотой гриб! +${formatNumber(bonus)} грибов!`);
+    setTimeout(() => setNotification(null), 3000);
+    
+    // Unlock achievement
+    if (!unlockedRef.current.has('golden')) {
+      setUnlockedAchievements(prev => {
+        const next = new Set(prev);
+        next.add('golden');
+        return next;
+      });
+    }
+  }, [calculateMPS, game.mushrooms]);
 
   // Buy building
   const buyBuilding = useCallback((buildingId: string) => {
@@ -377,16 +547,18 @@ export default function App() {
     }));
     setPurchasedUpgrades(new Set());
     setShowPrestigeConfirm(false);
+    setCombo(0);
+    setActiveEvents([]);
 
     setTimeout(() => {
       const saveData = {
         ...gameRef.current,
         purchasedUpgradeIds: [],
-        achievements: Array.from(unlockedAchievements),
+        achievements: Array.from(unlockedRef.current),
       };
       localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
     }, 0);
-  }, [getPrestigeSporesGain, game.prestigeUpgrades, unlockedAchievements]);
+  }, [getPrestigeSporesGain, game.prestigeUpgrades]);
 
   // Buy prestige upgrade
   const buyPrestigeUpgrade = useCallback((upgradeId: string) => {
@@ -411,13 +583,44 @@ export default function App() {
   const mps = calculateMPS();
   const clickPower = getClickPower();
   const prestigeGain = getPrestigeSporesGain();
+  const comboMulti = 1 + combo * 0.1;
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-green-950 via-green-900 to-emerald-950 text-white font-sans">
+    <div className="min-h-screen bg-gradient-to-b from-green-950 via-green-900 to-emerald-950 text-white font-sans relative overflow-hidden">
+      {/* Golden mushrooms floating */}
+      {goldenMushrooms.map((golden) => (
+        <button
+          key={golden.id}
+          onClick={() => handleGoldenClick(golden)}
+          className="absolute z-40 text-5xl cursor-pointer animate-bounce hover:scale-125 transition-transform drop-shadow-[0_0_15px_rgba(255,215,0,0.8)]"
+          style={{
+            left: `${golden.x}%`,
+            top: `${golden.y}%`,
+            animation: 'goldenFloat 3s ease-in-out infinite, goldenGlow 1s ease-in-out infinite alternate',
+          }}
+        >
+          🌟
+        </button>
+      ))}
+
       {/* Notification */}
       {notification && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-yellow-600/90 backdrop-blur-sm text-white px-6 py-3 rounded-xl shadow-2xl font-bold animate-bounce">
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[100] bg-yellow-600/90 backdrop-blur-sm text-white px-6 py-3 rounded-xl shadow-2xl font-bold animate-bounce max-w-sm text-center">
           {notification}
+        </div>
+      )}
+
+      {/* Active events display */}
+      {activeEvents.length > 0 && (
+        <div className="fixed top-16 right-4 z-30 space-y-1">
+          {activeEvents.filter(ae => ae.endsAt > Date.now()).map((ae, i) => {
+            const remaining = Math.ceil((ae.endsAt - Date.now()) / 1000);
+            return (
+              <div key={i} className="bg-purple-900/80 backdrop-blur-sm px-3 py-1.5 rounded-lg border border-purple-500/50 text-sm font-bold animate-pulse">
+                {ae.event.emoji} {ae.event.name} ({remaining}с)
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -452,6 +655,15 @@ export default function App() {
         {/* Left panel - Mushroom click area */}
         <div className="lg:col-span-1">
           <div className="bg-black/20 rounded-xl p-6 border border-green-700/30 backdrop-blur-sm">
+            {/* Combo display */}
+            {combo > 0 && (
+              <div className={`text-center mb-2 font-bold text-lg transition-all ${
+                combo >= 10 ? 'text-red-400 scale-110' : combo >= 5 ? 'text-orange-400' : 'text-yellow-300'
+              }`}>
+                🔥 КОМБО ×{combo} (+{Math.round((comboMulti - 1) * 100)}% к клику)
+              </div>
+            )}
+            
             {/* Mushroom button */}
             <div className="relative flex justify-center items-center mb-6">
               <button
@@ -466,7 +678,7 @@ export default function App() {
                 {clickEffects.map((effect) => (
                   <div
                     key={effect.id}
-                    className="absolute pointer-events-none text-yellow-300 font-bold text-lg"
+                    className={`absolute pointer-events-none font-bold text-lg ${effect.color || 'text-yellow-300'}`}
                     style={{
                       left: effect.x,
                       top: effect.y,
@@ -535,6 +747,8 @@ export default function App() {
                   </span>
                 ))}
               </div>
+              <p className="text-xs text-yellow-500 mt-2">🌟 Ловите золотые грибы для бонусов!</p>
+              <p className="text-xs text-orange-400 mt-1">🔥 Быстрые клики = комбо-множитель!</p>
             </div>
           </div>
         </div>
@@ -889,6 +1103,14 @@ export default function App() {
         @keyframes floatUp {
           0% { opacity: 1; transform: translateY(0) scale(1); }
           100% { opacity: 0; transform: translateY(-80px) scale(1.5); }
+        }
+        @keyframes goldenFloat {
+          0%, 100% { transform: translateY(0px) rotate(-5deg); }
+          50% { transform: translateY(-15px) rotate(5deg); }
+        }
+        @keyframes goldenGlow {
+          0% { filter: drop-shadow(0 0 10px rgba(255,215,0,0.5)); }
+          100% { filter: drop-shadow(0 0 25px rgba(255,215,0,1)); }
         }
       `}</style>
     </div>

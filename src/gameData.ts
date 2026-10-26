@@ -4,10 +4,10 @@ export const initialBuildings: Building[] = [
   {
     id: 'mycelium',
     name: 'Мицелий',
-    description: 'Простейшая грибница, медленно растит грибы',
-    baseCost: 10,
+    description: 'Простейшая грибница, растит грибы',
+    baseCost: 15,
     costMultiplier: 1.15,
-    baseProduction: 0.1,
+    baseProduction: 0.5,
     count: 0,
     emoji: '🌱',
     unlockAt: 0,
@@ -18,7 +18,7 @@ export const initialBuildings: Building[] = [
     description: 'Небольшая полянка с грибами',
     baseCost: 100,
     costMultiplier: 1.15,
-    baseProduction: 1,
+    baseProduction: 2,
     count: 0,
     emoji: '🍄',
     unlockAt: 50,
@@ -35,6 +35,17 @@ export const initialBuildings: Building[] = [
     unlockAt: 500,
   },
   {
+    id: 'beetle_farm',
+    name: 'Ферма жуков',
+    description: 'Жуки-грибоводы трудятся не покладая лап',
+    baseCost: 5000,
+    costMultiplier: 1.15,
+    baseProduction: 25,
+    count: 0,
+    emoji: '🪲',
+    unlockAt: 2000,
+  },
+  {
     id: 'forest',
     name: 'Грибной лес',
     description: 'Целый лес, наполненный грибами',
@@ -44,6 +55,17 @@ export const initialBuildings: Building[] = [
     count: 0,
     emoji: '🌲',
     unlockAt: 5000,
+  },
+  {
+    id: 'fairy_ring',
+    name: 'Ведьмин круг',
+    description: 'Магический круг из грибов, усиливающий рост',
+    baseCost: 50000,
+    costMultiplier: 1.15,
+    baseProduction: 120,
+    count: 0,
+    emoji: '🧚',
+    unlockAt: 20000,
   },
   {
     id: 'greenhouse',
@@ -111,6 +133,17 @@ export const initialBuildings: Building[] = [
     emoji: '🌌',
     unlockAt: 5000000000,
   },
+  {
+    id: 'multiverse',
+    name: 'Мультивселенная',
+    description: 'Бесконечное число вселенных грибов',
+    baseCost: 1000000000000,
+    costMultiplier: 1.15,
+    baseProduction: 10000000,
+    count: 0,
+    emoji: '🔮',
+    unlockAt: 50000000000,
+  },
 ];
 
 export const initialPrestigeUpgrades: PrestigeUpgrade[] = [
@@ -177,6 +210,9 @@ export const initialPrestigeUpgrades: PrestigeUpgrade[] = [
 ];
 
 export function formatNumber(num: number): string {
+  if (num < 0.01 && num > 0) return num.toFixed(3);
+  if (num < 1) return num.toFixed(2);
+  if (num < 10) return num.toFixed(1);
   if (num < 1000) return Math.floor(num).toString();
   if (num < 1000000) return (num / 1000).toFixed(1) + 'K';
   if (num < 1000000000) return (num / 1000000).toFixed(2) + 'M';
